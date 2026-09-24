@@ -6,7 +6,7 @@
 // Pin usages
 ///////////////////////////////////
 // Baseline mode -21 digital, 3 analog
-// GP0,1 is debug uart TX, RX (but rx not used)
+// GP0 and GP1 are not configured for UART.
 // GP2-GP22 are digital inputs
 // GP23 controls power supply modes and is not a board I/O
 // GP24 is a power sense and not a board I/O
@@ -27,7 +27,9 @@
 // Note: In the wireless versions, GPIO23-25 control the wifi chip, 23 and 24
 // aren't available in the PICO, and 25 controls the LED. So while the LED is
 // lost, there is no change in available channels for sampling.
-#define PICO_MODE 2 // 0 is baseline, 1 is digital 26, 2 is digital 32
+#ifndef PICO_MODE
+#define PICO_MODE 2
+#endif
 // WARNING: USE PIN_TEST_MODE with extreme caution!!!!
 // If set, treat the inputs (A&D) to be outputs so that the device can drive
 // values for turn-on testing.  Enabling this allows all modes to be tested
@@ -38,7 +40,7 @@
 #undef DIG_26_MODE
 #undef DIG_32_MODE
 #undef HAS_LED
-#if PICO_MODE == 0 // Baseline
+#if PICO_MODE == 0 || PICO_MODE == 3 // Baseline
 #define BASE_MODE 1
 #define NUM_A_CHAN 3  // number of analog channels
 #define NUM_D_CHAN 21 // number of digital channels
@@ -46,7 +48,7 @@
 // MEM_D_MASK is relative to the value written in memory, those may be different
 // depending on how data is shifted from the GPIOs into memory.
 #define GPIO_D_MASK 0x7FFFFC // Mask of bits for digital inputs
-#define UART_EN 1
+#define UART_EN 0
 // Since this mode has all digital inputs contigous, the upper mask isn't
 // needed.
 #define MEM_D_MASK_L 0x007FFFFF // lower mask of bits for digital inputs
@@ -76,6 +78,8 @@
 #define MEM_D_MASK_U 0x00000000 // upper mask of bits for digital inputs
 #define UART_EN 0
 #define PIN_TEST_MASK 0xFFFFFFFF
+#else
+#error "Unsupported PICO_MODE; expected 0, 1, 2, or 3"
 #endif
 // These two enable debug print outs of D4 generation, D4_DBG2 is higher
 // verbosity #define D4_DBG 1 #define D4_DBG2 2
@@ -88,21 +92,16 @@
 #else
 #define DMA_BUF_SIZE 220000
 #endif
-// The size of the buffer sent to the CDC serial
-// The TUD CDC buffer is only 256B so it doesn't help to have more than this.
+// The size of the staging buffer sent to USB CDC. Keep a few bytes of headroom
+// above the flush threshold for the largest encoded sample/RLE sequence.
 #define TX_BUF_SIZE 260
 // Setting to default value of Raspberry PI debug probe of 115200
 #define UART_BAUD 115200 // 921600
-// This sets the point which we will send data from the txbuf to the usb cdc.
-// For the 5-21 channel RLE it must leave a spare ~83 entries to cover the case
-// where a new long steady input comes after deciding to not send a sample.
-//(Assuming 128KB samples per half, a max rle value of 1568 we can get
-//   256*1024/2/1568=83 max length rles on a steady input).
-// Other than that the value is not very specific because the usb tub code
-// implement a 256 entry fifo that queues things up and sends max length 64B
-// transactions 20 is arbitrarly picked to ensure that if we have even a little
-// we send it so that at least something goes across the link.
-#define TX_BUF_THRESH 20
+// This sets the point at which txbuf is sent to USB CDC. Long RLE sequences are
+// flushed incrementally by check_rle(), so they cannot overrun this buffer.
+// Batch three full-speed USB packets before flushing. Sending tiny CDC writes
+// wastes packet capacity and makes high-rate captures much less reliable.
+#define TX_BUF_THRESH 192
 typedef enum {
   IDLE = 0,    // initial and ending condition, also cleanup variables used when
                // not idle

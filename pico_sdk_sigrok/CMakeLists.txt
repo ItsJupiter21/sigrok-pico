@@ -13,6 +13,9 @@ if (EXISTS ${picoVscode})
 endif()
 # ====================================================================================
 set(PICO_BOARD pico CACHE STRING "Board type")
+set(SIGROK_PICO_MODE "2" CACHE STRING
+    "Capture mode: 0=baseline, 1=26 digital, 2=32 digital, 3=baseline compatibility alias")
+set_property(CACHE SIGROK_PICO_MODE PROPERTY STRINGS 0 1 2 3)
 
 cmake_minimum_required(VERSION 3.13)
 
@@ -30,6 +33,13 @@ pico_sdk_init()
 add_executable(pico_sdk_sigrok
   pico_sdk_sigrok.c
   sr_device.c
+)
+
+target_compile_definitions(pico_sdk_sigrok PRIVATE
+  PICO_MODE=${SIGROK_PICO_MODE}
+  # Absorb short host scheduling stalls and let the encoder queue several
+  # full 64-byte USB packets instead of repeatedly flushing tiny writes.
+  CFG_TUD_CDC_TX_BUFSIZE=256
 )
 
 pico_enable_stdio_usb(pico_sdk_sigrok 1)

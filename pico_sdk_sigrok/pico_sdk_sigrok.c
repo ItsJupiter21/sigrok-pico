@@ -110,18 +110,15 @@ void print_DMA_chan(int chan) {
   Dprintf("TA%d %d\n\r", chan, *(tmpptr + 0x10 * chan + 2));
   Dprintf("CA%d 0x%X\n\r", chan, *(tmpptr + 0x10 * chan + 3));
 }
-// The function stdio_usb_out_chars is part of the PICO sdk usb library.
+// The function stdio_usb_out_chars is part of the PICO SDK USB library.
 // However the function is not externally visible from the library and rather
 // than figure out the build dependencies to do that it is just copied here.
 // This is much faster than a printf of the string, and even faster than the
 // puts_raw supported by the PICO SDK stdio library, which doesn't allow the
 // known length of the buffer to be specified. (The C standard write function
 // doesn't seem to work at all). This function also avoids the inserting of
-// CR/LF in certain modes. The tud_cdc_write_available function returns 256, and
-// thus we have a 256B buffer to feed into but the CDC serial issues in groups
-// of 64B. Since there is another memory fifo inside the TUD code this might
-// possibly be optimized to directly write to it, rather than writing txbuf.
-// That might allow faster rle processing but is a bit too complicated.
+// CR/LF in certain modes. The CDC queue is configured to 256 bytes and USB
+// full-speed bulk transfers are issued in 64-byte packets.
 
 void my_stdio_usb_out_chars(const char *buf, int length) {
   static uint64_t last_avail_time;
@@ -380,11 +377,16 @@ forward txbuf bytes to USB to prevent txbufidx from overflowing the size
 of txbuf. We do not always push to USB to reduce its impact
 on performance.
  */
+void check_tx_buf(uint16_t cnt);
+
 void inline check_rle() {
   //  Dprintf("RLEx %d\n\r",rlecnt);
   while (rlecnt >= 1568) {
     txbuf[txbufidx++] = 127;
     rlecnt -= 1568;
+    // A quiet RP2350 half-buffer can require more than 128 RLE tokens. Flush
+    // incrementally so a pre-existing partial batch cannot overflow txbuf.
+    check_tx_buf(TX_BUF_THRESH);
   }
   if (rlecnt > 32) {
     uint16_t rlediv = rlecnt >> 5;
@@ -426,19 +428,60 @@ void __attribute__((noinline)) send_slices_1B(sr_device_t *d, uint8_t *dbuf) {
   send_slice_init(d, dbuf);
   //   Dprintf("Enter 1Ba sts %d sr %d\n\r",d->samples_per_half,samp_remain);
   send_first_dig_sample(d, dbuf);
-  for (int s = 0; s < samp_remain; s++) {
+
+  // The first encoded sample leaves the input offset unaligned. Consume up to
+  // the next word boundary before using aligned 32-bit reads.
+  while (samp_remain && (rxbufdidx & 3)) {
     cval = dbuf[rxbufdidx++];
+    samp_remain--;
     if (cval == lval) {
       rlecnt++;
     } else {
-      //         Dprintf("SB n 0x%X o 0x%X rle %d ridx
-      //         %d\n\r",cval,lval,rlecnt,rxbufdidx);
       check_rle();
       tx_d_samp(d, cval);
       check_tx_buf(TX_BUF_THRESH);
-    } // if cval!=lval
+    }
     lval = cval;
-  } // for s
+  }
+
+  // Fast path for the common logic-analyzer case where all eight input bits
+  // remain unchanged. One comparison accounts for four captured samples.
+  while (samp_remain >= 4) {
+    uint32_t cword = *((uint32_t *)(dbuf + rxbufdidx));
+    uint32_t repeated = lval * UINT32_C(0x01010101);
+    rxbufdidx += 4;
+    samp_remain -= 4;
+    if (cword == repeated) {
+      rlecnt += 4;
+      continue;
+    }
+
+    for (int b = 0; b < 4; b++) {
+      cval = cword & 0xff;
+      cword >>= 8;
+      if (cval == lval) {
+        rlecnt++;
+      } else {
+        check_rle();
+        tx_d_samp(d, cval);
+        check_tx_buf(TX_BUF_THRESH);
+      }
+      lval = cval;
+    }
+  }
+
+  while (samp_remain) {
+    cval = dbuf[rxbufdidx++];
+    samp_remain--;
+    if (cval == lval) {
+      rlecnt++;
+    } else {
+      check_rle();
+      tx_d_samp(d, cval);
+      check_tx_buf(TX_BUF_THRESH);
+    }
+    lval = cval;
+  }
   check_rle();
   check_tx_buf(1);
 } // send_slices_1B

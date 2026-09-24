@@ -68,6 +68,22 @@ make
 
 Output: `pico_sdk_sigrok.uf2` in the build directory.
 
+Select the capture mode at configure time with `SIGROK_PICO_MODE`:
+
+| Value | Capture mode | Debug UART on GP0/GP1 |
+|-------|--------------|------------------------|
+| `0` | 21 digital + 3 analog | Disabled |
+| `1` | 26 digital | Disabled |
+| `2` | 32 digital | Disabled |
+| `3` | 21 digital + 3 analog (compatibility alias) | Disabled |
+
+For example, build the mixed-signal firmware without claiming GP0/GP1:
+
+```bash
+cmake -DPICO_BOARD=pico2 -DSIGROK_PICO_MODE=3 ..
+make
+```
+
 ---
 
 ## Building libsigrok
